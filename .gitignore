@@ -1,3 +1,4 @@
 build/
 dist/
 Kart Test Uygulamasi.spec
+__pycache__/
