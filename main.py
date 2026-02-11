@@ -27,7 +27,6 @@ class MainWindow(QMainWindow):
         # Connect buttons to functions
         self.ui.connectButton.clicked.connect(self.manageConnections)
         self.ui.scanPortsButton.clicked.connect(self.scanPorts)
-        self.ui.fullsetButton.clicked.connect(self.runFullset)
         self.ui.loadcellButton.clicked.connect(self.toggleLoadcell)
         self.ui.runCalibrateButton.clicked.connect(self.runCalibrateS1)
         self.ui.fanSlider.setRange(0, 100)
@@ -53,10 +52,46 @@ class MainWindow(QMainWindow):
             
             self.btn.clicked.connect(lambda checked=False, p=pin: self.togglePin(p))
 
+        # Fullset Button
+        self.ui.fullsetButton.clicked.connect(self.manageDenemeSync)
+        self.syncTimer = QTimer()
+        self.syncTimer.timeout.connect(self.sendLiveStatus)
+
         # Timer to read terminal
         self.readTimer = QTimer()
         self.readTimer.timeout.connect(self.readSerialData)
         self.readTimer.start(10)
+
+    def manageDenemeSync(self):
+        if self.ui.fullsetButton.isChecked():
+            self.syncTimer.start(100)
+            self.ui.fullsetButton.setText("Sürekli Veri Gönderimi")
+        else:
+            self.syncTimer.stop()
+            
+            for p in [22, 23, 24, 25]:
+                button = self.pinButtons.get(p)
+                if button and button.isChecked():
+                    QTimer.singleShot(5000, lambda pin_no=p: self.resetPinUI(pin_no))
+
+    def sendLiveStatus(self):
+        try:
+            deger = 0
+
+            # Get byte
+            for i, p in enumerate(range(22, 30)):
+                button = self.pinButtons.get(p)
+                if button and button.isChecked():
+                    deger += (1 << i)
+
+            fanSpeed = self.ui.fanSlider.value()
+
+            # Send fullset command to board
+            self.sendCommand(f"CMD FULLSET {deger} {fanSpeed} FE")
+            
+        except Exception as e:
+            self.writeLog(f"Fullset Hatası: {e}")
+            self.syncTimer.stop()
 
     # Read data from board
     def readSerialData(self):
@@ -103,12 +138,19 @@ class MainWindow(QMainWindow):
 
     # Inital Commands
     def sendInitialCommands(self):
-        for pin in range(22, 30): self.sendCommand(f"CMD SET {pin} 0")
+        for pin in range(22, 30): 
+            self.sendCommand(f"CMD SET {pin} 0")
+            self.resetPinUI(pin=pin)
         self.sendCommand("CMD SET LOADCELL_ACTIVE 0")
         self.sendCommand("CMD SET RFID_ACTIVE 0")
         self.sendCommand("CMD SET TEMP_ACTIVE 1")
         self.sendCommand("CMD SET SEND_DATA_CONTINUOUSLY 1")
         self.sendCommand("CMD SET HEARTBEAT 0")
+
+        self.loadcellActive = self.RFID = False
+        self.tempActive = self.continuousData = True
+        self.ui.heartbeatCheckBox.setChecked(False)
+        
 
         self.ui.continuousCheckBox.setChecked(True)
         self.ui.temperatureCheckBox.setChecked(True)
@@ -133,21 +175,7 @@ class MainWindow(QMainWindow):
         for port in ports:
             self.ui.portCombo.addItem(port.device)
 
-    # When clicked fullset button
-    def runFullset(self):
-        self.sendCommand("CMD FULLSET 255 30 FE")
 
-        self.ui.fanSlider.setValue(30)
-        self.ui.label_2.setText("Fan Hızı: %30")
-
-        for p in range(22, 30):
-            button = self.pinButtons.get(p)
-            if button:
-                setattr(self, f"pin{p}", True)
-                button.setChecked(True)
-
-        for p in [22, 23, 24, 25]:
-            QTimer.singleShot(5000, lambda p=p: self.resetPinUI(p))
 
     # To get loadcell value
     def toggleLoadcell(self):
@@ -221,28 +249,28 @@ class MainWindow(QMainWindow):
         self.tempActive = not self.tempActive
         self.sendCommand(f"CMD SET TEMP_ACTIVE {1 if self.tempActive else 0}")
 
-    # Turn on or Turn off pins
+    # Turn on or off pins
     def togglePin(self, pin):
         pin_state_name = f"pin{pin}" 
-        
         currentState = getattr(self, pin_state_name, False)
         newState = not currentState
-        
         setattr(self, pin_state_name, newState)
         
-        self.sendCommand(f"CMD SET {pin} {1 if newState else 0}")
-        
-        if pin in [22, 23, 24, 25] and newState:
-            QTimer.singleShot(5000, lambda: self.resetPinUI(pin))
+        if not self.ui.fullsetButton.isChecked():
+            self.sendCommand(f"CMD SET {pin} {1 if newState else 0}")
+            
+            if pin in [22, 23, 24, 25] and newState:
+                QTimer.singleShot(5000, lambda: self.resetPinUI(pin))
 
-    # Reset pin UI (for Pin 22, 23, 24 and 25)
+    # Reset pin UI 
     def resetPinUI(self, pin):
+        if self.ui.fullsetButton.isChecked():
+            return 
+            
         setattr(self, f"pin{pin}", False)
-        
         button = self.pinButtons.get(pin)
-        
         if button:
-            button.setChecked(False)         
+            button.setChecked(False)     
 
     # To take tare
     def runTare(self):
